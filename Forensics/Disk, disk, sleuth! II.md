@@ -48,4 +48,4 @@ $ icat -o 2048 dds2-alpine.flag.img 18291
   \_/   \_/   \_/   \_/   \_/   \_/   \_/   \_/   \_/   \_/   \_/
 ```
 
-picoCTF{f0r3ns1c4t0r_n0v1c3_0ba8d02d} 
+Thus the flag for this challenge `picoCTF{f0r3ns1c4t0r_n0v1c3_0ba8d02d}`
