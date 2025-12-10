@@ -20,83 +20,98 @@ import re
 import subprocess
 from pwn import remote
 
-HOST = "filtermaze.2025.ctfcompetition.com"
-PORT = 1337
-
-def get_pow_token(banner: str) -> str:
-  
-    m = re.search(r"solve\s+(s\.[^\s]+)", banner)
-    if not m:
-        raise ValueError("Could not find PoW token")
-    return m.group(1)
+SERVER = "filtermaze.2025.ctfcompetition.com"
+SERVER_PORT = 1337
 
 
-def solve_pow(token: str) -> str:
-    cmd = f"python3 <(curl -sSL https://goo.gle/kctf-pow) solve {token}"
-    out = subprocess.check_output(["bash", "-lc", cmd], text=True)
-    
-    for line in reversed(out.splitlines()):
+def extract_pow_challenge(text: str) -> str:
+    match = re.search(r"solve\s+(s\.[^\s]+)", text)
+    if not match:
+        raise RuntimeError("PoW challenge not found")
+    return match.group(1)
+
+
+def complete_pow(challenge: str) -> str:
+    command = (
+        f"python3 <(curl -sSL https://goo.gle/kctf-pow) "
+        f"solve {challenge}"
+    )
+    output = subprocess.check_output(["bash", "-lc", command], text=True)
+
+    for line in reversed(output.splitlines()):
         m = re.search(r"(s\.[A-Za-z0-9+/=]+)", line)
         if m:
             return m.group(1)
-    raise ValueError("Could not solve PoW")
 
-def solve_maze(r):
-   
+    raise RuntimeError("Failed to extract PoW solution")
+
+
+def traverse_maze(conn):
     with open("graph.json") as f:
-        graph_raw = json.load(f)
-    graph = {int(k): v for k, v in graph_raw.items()}
+        raw_graph = json.load(f)
 
-    path = [0]
-    print("Starting path finding from node 0")
+    maze = {int(node): edges for node, edges in raw_graph.items()}
+    current_path = [0]
+
+    print("Maze traversal initiated at node 0")
 
     while True:
-        last = path[-1]
-        neighbors = graph[last]
-        
-        for nxt in neighbors:
-            if nxt in path:
-                continue  
-            candidate = path + [nxt]
-            cmd = {"command": "check_path", "segment": candidate}
-            r.sendline(json.dumps(cmd).encode())
-            resp_line = r.recvline().decode().strip()
-            resp = json.loads(resp_line)
-            status = resp.get("status")
+        current_node = current_path[-1]
+        neighbors = maze[current_node]
 
-            if status == "valid_prefix":
-                path.append(nxt)
-                print(f"Extended path to length {len(path)}: ...{path[-3:]}")
+        for next_node in neighbors:
+            if next_node in current_path:
+                continue
+
+            trial_path = current_path + [next_node]
+            payload = {
+                "command": "check_path",
+                "segment": trial_path
+            }
+
+            conn.sendline(json.dumps(payload).encode())
+            response = json.loads(conn.recvline().decode().strip())
+            state = response.get("status")
+
+            if state == "valid_prefix":
+                current_path.append(next_node)
+                print(f"Path extended → length {len(current_path)}")
                 break
-            elif status == "path_complete":
-                full_path = candidate
-                err_mags = resp["lwe_error_magnitudes"]
-                return full_path, err_mags
 
-def main():
-    print("Connecting to server")
-    r = remote(HOST, PORT)
-    banner = r.recvuntil(b"Solution?").decode()
-    token = get_pow_token(banner)
-    print(f"Solving PoW: {token}")
-    solution = solve_pow(token)
-    r.sendline(solution.encode())
+            if state == "path_complete":
+                return trial_path, response["lwe_error_magnitudes"]
+
+
+def run():
+    print("Opening connection to challenge server")
+    io = remote(SERVER, SERVER_PORT)
+
+    banner = io.recvuntil(b"Solution?").decode()
+    challenge_token = extract_pow_challenge(banner)
+
+    print(f"PoW challenge received: {challenge_token}")
+    pow_answer = complete_pow(challenge_token)
+    io.sendline(pow_answer.encode())
+
+    # clear remaining server messages
     for _ in range(4):
-        line = r.recvline(timeout=2)
-        if not line:
-            break
-    path, err_mags = solve_maze(r)
-    r.close()    
-    print("\nFound the secret path:")
-    print(f"Path: {path}")
-    print(f"\nReceived error magnitudes (first 10): {err_mags[:10]}")
-    print(f"Total error values: {len(err_mags)}")
-    
+        io.recvline(timeout=2)
+
+    solution_path, errors = traverse_maze(io)
+    io.close()
+
+    print("\nMaze solved")
+    print(f"Final path: {solution_path}")
+    print(f"Error magnitudes : {errors[:10]}")
+    print(f"Total errors: {len(errors)}")
+
     with open("error_magnitudes.json", "w") as f:
-        json.dump(err_mags, f)
+        json.dump(errors, f)
+
 
 if __name__ == "__main__":
-    main()
+    run()
+
 ```
 
 
